@@ -36,16 +36,25 @@ static inline bool ksu_is_hidden_app(void)
 {
     char buf[128];
     int len, pkg_len, i;
+    static int dbg_once;
 
     // get_cmdline 读取当前进程 cmdline，返回写入字节数；首参数是包名，以 '\0' 结尾。
     len = get_cmdline(current, buf, sizeof(buf) - 1);
-    if (len <= 0)
+    if (len <= 0) {
+        if (!dbg_once)
+            pr_info("ksu_hide: get_cmdline failed len=%d\n", len);
         return false;
+    }
     buf[len] = '\0';
     // 取第一个 '\0' 之前的字符串作为包名(忽略后续参数)。
     pkg_len = strnlen(buf, len);
     if (pkg_len == 0)
         return false;
+
+    if (!dbg_once) {
+        pr_info("ksu_hide: cmdline=[%s] len=%d\n", buf, len);
+        dbg_once = 1;
+    }
 
     for (i = 0; i < ARRAY_SIZE(ksu_hide_pkg); i++) {
         const char *pkg = ksu_hide_pkg[i];

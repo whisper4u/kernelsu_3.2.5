@@ -52,19 +52,18 @@ jobs:
           echo "Building for KMI: $KMI"
           set -x
           ddk pull "$KMI"
-          ODIR="$(pwd)/out/$KMI"
-          mkdir -p "$ODIR"
-          ddk build "$KMI" "ODIR=$ODIR" -e CONFIG_KSU=m
+          ddk build "$KMI" -e CONFIG_KSU=m
           echo "ddk build exit code: $?"
 
       - name: Find, strip and collect artifact
         run: |
           cd kernelsu-kernel
-          KO=$(find out -name 'kernelsu.ko' | head -n1)
+          KO=$(find . -name 'kernelsu.ko' | head -n1)
           if [ -z "$KO" ]; then
-            echo "kernelsu.ko not found, listing out/:"; ls -R out 2>/dev/null
+            echo "kernelsu.ko not found, listing tree:"; find . -name '*.ko' | head -n20
             exit 1
           fi
+          echo "Found: $KO"
           llvm-strip -d "$KO" 2>/dev/null || strip "$KO"
           cp "$KO" "$GITHUB_WORKSPACE/kernelsu.ko"
           ls -l "$GITHUB_WORKSPACE/kernelsu.ko"

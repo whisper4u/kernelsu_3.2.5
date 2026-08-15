@@ -8,6 +8,7 @@
 #include <linux/static_key.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
+#include <linux/mm.h>
 
 #include "arch.h"
 #include "klog.h" // IWYU pragma: keep
@@ -22,28 +23,30 @@
 #include "feature/adb_root.h"
 
 // 仅对指定包名的 App 跳过 sucompat 逻辑，使其 stat/faccessat 调用回归原生，
-// 从而规避基于 stat 时延差的 root 检测。按包名(进程 comm)匹配，跨手机通用，
-// 无需关心动态分配的 uid。包名编译期固定，如需增减包名改这里即可。
-static const char *const ksu_hide_comm[] = {
+// 从而规避基于 stat 时延差的 root 检测。按包名(/proc/pid/cmdline 首段)匹配，
+// 跨手机通用，无需关心动态分配的 uid。包名编译期固定，如需增减包名改这里即可。
+// 注意: Android App 的 comm 是 "app_process64" 而非包名，故须读 cmdline 取包名。
+static const char *const ksu_hide_pkg[] = {
     "com.chunqiunativecheck",
     "com.zhenxi.hunter",
 };
 
 static inline bool ksu_is_hidden_app(void)
 {
-    char comm[TASK_COMM_LEN];
-    int i;
+    char cmdline[128];
+    int len, i;
 
-    get_task_comm(comm, current);
-    // 内核 comm 最多 16 字节(含'\0')，即最多 15 个可见字符，长包名会被截断，
-    // 因此按 comm 与包名的"较短者"比较(封顶 15)，只看前 15 字符是否一致即可唯一区分。
-    for (i = 0; i < ARRAY_SIZE(ksu_hide_comm); i++) {
-        const char *pkg = ksu_hide_comm[i];
+    // get_cmdline 读取当前进程 cmdline，首个参数即包名，以 '\0' 结尾。
+    len = get_cmdline(current, cmdline, sizeof(cmdline) - 1);
+    if (len <= 0)
+        return false;
+    cmdline[len] = '\0';
+
+    for (i = 0; i < ARRAY_SIZE(ksu_hide_pkg); i++) {
+        const char *pkg = ksu_hide_pkg[i];
         int n = strlen(pkg);
 
-        if (n > 15)
-            n = 15;
-        if (strncmp(comm, pkg, n) == 0)
+        if (strncmp(cmdline, pkg, n) == 0)
             return true;
     }
     return false;

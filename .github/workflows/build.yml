@@ -16,6 +16,11 @@ on:
           - android14-6.1
           - android15-6.6
           - android16-6.12
+      ksu_version:
+        description: "KSU driver version (must match Manager version)"
+        required: false
+        default: "32525"
+        type: string
   push:
     branches: [main]
 
@@ -49,10 +54,11 @@ jobs:
         run: |
           cd kernelsu-kernel
           KMI="${{ github.event.inputs.kmi || 'android12-5.10' }}"
-          echo "Building for KMI: $KMI"
+          KSU_VER="${{ github.event.inputs.ksu_version || '32525' }}"
+          echo "Building for KMI: $KMI, KSU_VERSION: $KSU_VER"
           set -x
           ddk pull "$KMI"
-          ddk build "$KMI" -e CONFIG_KSU=m
+          ddk build "$KMI" -e CONFIG_KSU=m -e KSU_VERSION=$KSU_VER
           echo "ddk build exit code: $?"
 
       - name: Find, strip and collect artifact

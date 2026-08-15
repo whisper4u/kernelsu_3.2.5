@@ -6,6 +6,8 @@
 #include <asm/syscall.h>
 #include <linux/ptrace.h>
 #include <linux/static_key.h>
+#include <linux/module.h>
+#include <linux/moduleparam.h>
 
 #include "arch.h"
 #include "klog.h" // IWYU pragma: keep

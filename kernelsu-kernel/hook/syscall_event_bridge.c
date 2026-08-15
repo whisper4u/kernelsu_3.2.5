@@ -7,6 +7,7 @@
 #include <linux/ptrace.h>
 #include <linux/static_key.h>
 #include <linux/sched.h>
+#include <linux/kernel.h>
 
 #include "arch.h"
 #include "klog.h" // IWYU pragma: keep
@@ -22,17 +23,27 @@
 
 // 仅对指定包名的 App 跳过 sucompat 逻辑，使其 stat/faccessat 调用回归原生，
 // 从而规避基于 stat 时延差的 root 检测。按包名(进程 comm)匹配，跨手机通用，
-// 无需关心动态分配的 uid。包名编译期固定，如需改变包名改这里即可。
-#define KSU_HIDE_COMM "com.chunqiunativecheck"
+// 无需关心动态分配的 uid。包名编译期固定，如需增减包名改这里即可。
+static const char *const ksu_hide_comm[] = {
+    "com.chunqiunativecheck",
+    "com.zhenxi.hunter",
+};
 
 static inline bool ksu_is_hidden_app(void)
 {
     char comm[TASK_COMM_LEN];
+    int i;
 
     get_task_comm(comm, current);
     // comm 形如 "com.chunqiunativecheck" 或 "com.chunqiunativecheck:remote"，
     // 用 strncmp 匹配包名前缀即可覆盖该 App 所有进程。
-    return strncmp(comm, KSU_HIDE_COMM, sizeof(KSU_HIDE_COMM) - 1) == 0;
+    for (i = 0; i < ARRAY_SIZE(ksu_hide_comm); i++) {
+        const char *pkg = ksu_hide_comm[i];
+
+        if (strncmp(comm, pkg, strlen(pkg)) == 0)
+            return true;
+    }
+    return false;
 }
 
 static int ksu_handle_init_mark_tracker(const char __user **filename_user)

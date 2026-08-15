@@ -32,14 +32,16 @@ jobs:
           sudo apt-get install -y git curl wget python3 zip llvm
 
       # ddk 是 KernelSU LKM 官方构建工具 (fork of Ylarod/ddk)。
-      # 正确安装方式: 下载 scripts/ddk 脚本到 PATH。
       - name: Install ddk
         run: |
           curl -fsSL https://raw.githubusercontent.com/Ylarod/ddk/main/scripts/ddk -o ddk
           chmod +x ddk
           sudo mv ddk /usr/local/bin/ddk
+          # 预先写入 source 配置，避免非交互环境下 ddk 等待用户输入而退出
+          mkdir -p ~/.ddk
+          echo "github" > ~/.ddk/source
           which ddk
-          ddk --help || true
+          cat ~/.ddk/source
 
       # 仓库内已包含改好的 kernel 源码（含 ksu_hide_uid 补丁），
       # 直接用它来编，不依赖外部 tag。

@@ -23,14 +23,11 @@
 
 // 仅对指定 uid 的 App 跳过 sucompat 逻辑，使其 stat/faccessat 调用回归原生，
 // 从而规避基于 stat 时延差的 root 检测。用途: 自测，仅作用于设定 uid。
-static int ksu_hide_uid = 0;
-module_param(ksu_hide_uid, int, 0644);
-MODULE_PARM_DESC(ksu_hide_uid, "uid of app to hide from stat hook");
+// uid 写死为检测 App (com.chunqiunativecheck) 的 uid，编译期固定，无需运行时写参数。
+static int ksu_hide_uid = 10307;
 
 static inline bool ksu_is_hidden_app(void)
 {
-    if (ksu_hide_uid == 0)
-        return false;
     return current_uid().val == (uid_t)ksu_hide_uid;
 }
 

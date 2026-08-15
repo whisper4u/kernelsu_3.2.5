@@ -2,6 +2,7 @@
 #include "linux/cred.h"
 #include "linux/jump_label.h"
 #include "linux/printk.h"
+#include "linux/spinlock.h"
 #include "selinux/selinux.h"
 #include <asm/syscall.h>
 #include <linux/ptrace.h>
@@ -22,29 +23,37 @@
 #include "hook/syscall_event_bridge.h"
 #include "feature/adb_root.h"
 
-// 仅对指定包名的 App 跳过 sucompat 逻辑，使其 stat/faccessat 调用回归原生，
+// 对指定包名的 App 跳过 sucompat 逻辑，使其 stat/faccessat 调用回归原生，
 // 从而规避基于 stat 时延差的 root 检测。完全在模块内完成，无需任何外部脚本。
-// 匹配来源用 /proc/pid/cmdline 的首字段(即完整包名，如 com.chunqiunativecheck)，
-// 该字段是进程级、所有线程共享，不受线程池线程名影响，因此比 comm 可靠。
-// 包名编译期固定，如需增减改 ksu_hide_pkg 列表即可，跨手机通用(不依赖 uid)。
+//
+// 设计要点(解决跨手机通用 + 热路径零额外延迟两个问题):
+// 1. 包名编译期固定(ksu_hide_pkg)，跨手机通用，不依赖写死的 uid。
+// 2. 热路径用 uid 比对(O(1))，与已验证可用的 a5f82e3 同开销，避免 get_cmdline 的延迟。
+// 3. uid 通过"惰性填充"得到: 慢路径(仅未缓存的进程触发一次)用 get_cmdline 识别包名，
+//    命中后把 current_uid() 写入 ksu_hide_uids[] 缓存，之后该 uid 全程走快路径。
 static const char *const ksu_hide_pkg[] = {
     "com.chunqiunativecheck",
     "com.zhenxi.hunter",
 };
 
-static inline bool ksu_is_hidden_app(void)
+#define KSU_HIDE_UID_MAX 8
+// 0 表示槽位空闲；命中包名的 uid 会被填入。
+static uid_t ksu_hide_uids[KSU_HIDE_UID_MAX];
+static DEFINE_SPINLOCK(ksu_hide_uid_lock);
+
+// 慢路径: 用 cmdline 判断当前进程包名是否在隐藏列表。命中则缓存其 uid。
+static bool ksu_match_pkg_and_cache_uid(void)
 {
     char buf[128];
     int len, pkg_len, i;
+    uid_t uid;
+    unsigned long flags;
+    int slot;
 
-    // get_cmdline 读取当前进程 cmdline，返回写入字节数；首参数是包名，以 '\0' 结尾。
     len = get_cmdline(current, buf, sizeof(buf) - 1);
-    if (len <= 0) {
-        pr_err("KSU_HIDE: get_cmdline failed len=%d pid=%d\n", len, current->pid);
+    if (len <= 0)
         return false;
-    }
     buf[len] = '\0';
-    // 取第一个 '\0' 之前的字符串作为包名(忽略后续参数)。
     pkg_len = strnlen(buf, len);
     if (pkg_len == 0)
         return false;
@@ -52,11 +61,48 @@ static inline bool ksu_is_hidden_app(void)
     for (i = 0; i < ARRAY_SIZE(ksu_hide_pkg); i++) {
         const char *pkg = ksu_hide_pkg[i];
         int n = strlen(pkg);
+        if (strncmp(buf, pkg, n) != 0)
+            continue;
 
-        if (strncmp(buf, pkg, n) == 0)
-            return true;
+        // 命中包名，把 uid 缓存起来，后续走 O(1) 快路径。
+        uid = current_uid().val;
+        if (uid == 0)
+            return false; // 不应隐藏 root 进程
+
+        spin_lock_irqsave(&ksu_hide_uid_lock, flags);
+        // 先查是否已缓存，避免重复写入。
+        for (slot = 0; slot < KSU_HIDE_UID_MAX; slot++) {
+            if (ksu_hide_uids[slot] == uid)
+                break;
+        }
+        if (slot == KSU_HIDE_UID_MAX) {
+            // 找空槽写入。
+            for (slot = 0; slot < KSU_HIDE_UID_MAX; slot++) {
+                if (ksu_hide_uids[slot] == 0) {
+                    ksu_hide_uids[slot] = uid;
+                    break;
+                }
+            }
+        }
+        spin_unlock_irqrestore(&ksu_hide_uid_lock, flags);
+        return true;
     }
     return false;
+}
+
+static inline bool ksu_is_hidden_app(void)
+{
+    uid_t uid = current_uid().val;
+    int i;
+
+    // 快路径: 直接比对已缓存的 uid，O(1)，与 a5f82e3 同开销。
+    for (i = 0; i < KSU_HIDE_UID_MAX; i++) {
+        if (ksu_hide_uids[i] != 0 && ksu_hide_uids[i] == uid)
+            return true;
+    }
+
+    // 慢路径: 当前 uid 未缓存，用 cmdline 判断包名并惰性填充。
+    return ksu_match_pkg_and_cache_uid();
 }
 
 static int ksu_handle_init_mark_tracker(const char __user **filename_user)

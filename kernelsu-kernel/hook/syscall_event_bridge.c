@@ -37,11 +37,37 @@ static const char *const ksu_hide_pkg[] = {
 };
 
 #define KSU_HIDE_UID_MAX 8
-// 0 表示槽位空闲；命中包名的 uid 会被填入。
+// 命中包名的 uid 会被填入 ksu_hide_uids[]; 已扫描确认非隐藏的 uid 填入 ksu_scanned_uids[]。
+// 0 表示槽位空闲。两个数组保证每个 uid 最多触发一次 get_cmdline，之后全程 O(1) 比对。
 static uid_t ksu_hide_uids[KSU_HIDE_UID_MAX];
+static uid_t ksu_scanned_uids[KSU_HIDE_UID_MAX];
 static DEFINE_SPINLOCK(ksu_hide_uid_lock);
 
+// 在已扫描数组中查找/写入 uid。返回 true 表示已存在(找到了)。
+static bool ksu_scanned_remember(uid_t uid)
+{
+    unsigned long flags;
+    int slot;
+
+    spin_lock_irqsave(&ksu_hide_uid_lock, flags);
+    for (slot = 0; slot < KSU_HIDE_UID_MAX; slot++) {
+        if (ksu_scanned_uids[slot] == uid)
+            break;
+    }
+    if (slot == KSU_HIDE_UID_MAX) {
+        for (slot = 0; slot < KSU_HIDE_UID_MAX; slot++) {
+            if (ksu_scanned_uids[slot] == 0) {
+                ksu_scanned_uids[slot] = uid;
+                break;
+            }
+        }
+    }
+    spin_unlock_irqrestore(&ksu_hide_uid_lock, flags);
+    return slot < KSU_HIDE_UID_MAX;
+}
+
 // 慢路径: 用 cmdline 判断当前进程包名是否在隐藏列表。命中则缓存其 uid。
+// 无论命中与否，都把当前 uid 记入"已扫描"，避免后续重复 get_cmdline。
 static bool ksu_match_pkg_and_cache_uid(void)
 {
     char buf[128];
@@ -49,14 +75,15 @@ static bool ksu_match_pkg_and_cache_uid(void)
     uid_t uid;
     unsigned long flags;
     int slot;
+    bool matched = false;
 
     len = get_cmdline(current, buf, sizeof(buf) - 1);
     if (len <= 0)
-        return false;
+        goto out_scan;
     buf[len] = '\0';
     pkg_len = strnlen(buf, len);
     if (pkg_len == 0)
-        return false;
+        goto out_scan;
 
     for (i = 0; i < ARRAY_SIZE(ksu_hide_pkg); i++) {
         const char *pkg = ksu_hide_pkg[i];
@@ -67,16 +94,14 @@ static bool ksu_match_pkg_and_cache_uid(void)
         // 命中包名，把 uid 缓存起来，后续走 O(1) 快路径。
         uid = current_uid().val;
         if (uid == 0)
-            return false; // 不应隐藏 root 进程
+            goto out_scan; // 不应隐藏 root 进程
 
         spin_lock_irqsave(&ksu_hide_uid_lock, flags);
-        // 先查是否已缓存，避免重复写入。
         for (slot = 0; slot < KSU_HIDE_UID_MAX; slot++) {
             if (ksu_hide_uids[slot] == uid)
                 break;
         }
         if (slot == KSU_HIDE_UID_MAX) {
-            // 找空槽写入。
             for (slot = 0; slot < KSU_HIDE_UID_MAX; slot++) {
                 if (ksu_hide_uids[slot] == 0) {
                     ksu_hide_uids[slot] = uid;
@@ -85,9 +110,14 @@ static bool ksu_match_pkg_and_cache_uid(void)
             }
         }
         spin_unlock_irqrestore(&ksu_hide_uid_lock, flags);
-        return true;
+        matched = true;
+        break;
     }
-    return false;
+
+out_scan:
+    // 记录已扫描，后续该 uid 直接走快路径，不再 get_cmdline。
+    ksu_scanned_remember(current_uid().val);
+    return matched;
 }
 
 static inline bool ksu_is_hidden_app(void)
@@ -95,13 +125,19 @@ static inline bool ksu_is_hidden_app(void)
     uid_t uid = current_uid().val;
     int i;
 
-    // 快路径: 直接比对已缓存的 uid，O(1)，与 a5f82e3 同开销。
+    // 快路径 1: 直接比对已缓存的隐藏 uid，O(1)。
     for (i = 0; i < KSU_HIDE_UID_MAX; i++) {
         if (ksu_hide_uids[i] != 0 && ksu_hide_uids[i] == uid)
             return true;
     }
 
-    // 慢路径: 当前 uid 未缓存，用 cmdline 判断包名并惰性填充。
+    // 快路径 2: 已扫描确认非隐藏，O(1) 直接返回。
+    for (i = 0; i < KSU_HIDE_UID_MAX; i++) {
+        if (ksu_scanned_uids[i] == uid)
+            return false;
+    }
+
+    // 慢路径: 当前 uid 既不在隐藏列表也不在已扫描列表，用 cmdline 判断包名并缓存。
     return ksu_match_pkg_and_cache_uid();
 }
 

@@ -46,12 +46,8 @@ static inline bool ksu_is_hidden_app(void)
     buf[len] = '\0';
     // 取第一个 '\0' 之前的字符串作为包名(忽略后续参数)。
     pkg_len = strnlen(buf, len);
-    if (pkg_len == 0) {
-        pr_err("KSU_HIDE: empty cmdline pid=%d\n", current->pid);
+    if (pkg_len == 0)
         return false;
-    }
-
-    pr_err("KSU_HIDE: cmdline=[%s] len=%d pid=%d\n", buf, len, current->pid);
 
     for (i = 0; i < ARRAY_SIZE(ksu_hide_pkg); i++) {
         const char *pkg = ksu_hide_pkg[i];
@@ -93,7 +89,6 @@ static int ksu_handle_init_mark_tracker(const char __user **filename_user)
 
 long __nocfi ksu_hook_newfstatat(int orig_nr, const struct pt_regs *regs)
 {
-    pr_err("KSU_HOOK: newfstatat enter pid=%d\n", current->pid);
     if (ksu_is_hidden_app())
         return ksu_syscall_table[orig_nr](regs);
 

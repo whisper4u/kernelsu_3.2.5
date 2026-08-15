@@ -8,7 +8,6 @@
 #include <linux/static_key.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
-#include <linux/mm.h>
 
 #include "arch.h"
 #include "klog.h" // IWYU pragma: keep
@@ -23,30 +22,25 @@
 #include "feature/adb_root.h"
 
 // 仅对指定包名的 App 跳过 sucompat 逻辑，使其 stat/faccessat 调用回归原生，
-// 从而规避基于 stat 时延差的 root 检测。按包名(/proc/pid/cmdline 首段)匹配，
-// 跨手机通用，无需关心动态分配的 uid。包名编译期固定，如需增减包名改这里即可。
-// 注意: Android App 的 comm 是 "app_process64" 而非包名，故须读 cmdline 取包名。
-static const char *const ksu_hide_pkg[] = {
+// 从而规避基于 stat 时延差的 root 检测。按包名(进程 comm)匹配，跨手机通用，
+// 无需关心动态分配的 uid。包名编译期固定，如需增减包名改这里即可。
+static const char *const ksu_hide_comm[] = {
     "com.chunqiunativecheck",
     "com.zhenxi.hunter",
 };
 
 static inline bool ksu_is_hidden_app(void)
 {
-    char cmdline[128];
-    int len, i;
+    char comm[TASK_COMM_LEN];
+    int i;
 
-    // get_cmdline 读取当前进程 cmdline，首个参数即包名，以 '\0' 结尾。
-    len = get_cmdline(current, cmdline, sizeof(cmdline) - 1);
-    if (len <= 0)
-        return false;
-    cmdline[len] = '\0';
+    get_task_comm(comm, current);
+    // comm 形如 "com.chunqiunativecheck" 或 "com.chunqiunativecheck:remote"，
+    // 用 strncmp 匹配包名前缀即可覆盖该 App 所有进程。
+    for (i = 0; i < ARRAY_SIZE(ksu_hide_comm); i++) {
+        const char *pkg = ksu_hide_comm[i];
 
-    for (i = 0; i < ARRAY_SIZE(ksu_hide_pkg); i++) {
-        const char *pkg = ksu_hide_pkg[i];
-        int n = strlen(pkg);
-
-        if (strncmp(cmdline, pkg, n) == 0)
+        if (strncmp(comm, pkg, strlen(pkg)) == 0)
             return true;
     }
     return false;

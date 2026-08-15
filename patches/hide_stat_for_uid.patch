@@ -1,0 +1,47 @@
+# 仅对指定 uid 跳过 sucompat 的 stat/faccessat hook
+# 用途：自测自己的根检测 App，使其 stat 时延差回归原生。
+# 应用对象：com.chunqiunativecheck（仅通过 ksu_hide_uid 参数指定，未写死包名）
+--- a/kernel/hook/syscall_event_bridge.c
++++ b/kernel/hook/syscall_event_bridge.c
+@@
+ #include "hook/syscall_event_bridge.h"
+ #include "feature/adb_root.h"
+ 
++// 仅对指定 uid 的 App 跳过 sucompat 逻辑，使其 stat/faccessat 调用回归原生，
++// 从而规避基于 stat 时延差的 root 检测。用途: 自测，仅作用于设定 uid。
++static int ksu_hide_uid = 0;
++module_param(ksu_hide_uid, int, 0644);
++MODULE_PARM_DESC(ksu_hide_uid, "uid of app to hide from stat hook");
++
++static inline bool ksu_is_hidden_app(void)
++{
++    if (ksu_hide_uid == 0)
++        return false;
++    return current_uid().val == (uid_t)ksu_hide_uid;
++}
++
+ static int ksu_handle_init_mark_tracker(const char __user **filename_user)
+ {
+ 	char path[64];
+@@
+ long __nocfi ksu_hook_newfstatat(int orig_nr, const struct pt_regs *regs)
+ {
++	if (ksu_is_hidden_app())
++		return ksu_syscall_table[orig_nr](regs);
++
+ 	if (!ksu_su_compat_enabled)
+ 		return ksu_syscall_table[orig_nr](regs);
+ 
+ 	return ksu_handle_stat_sucompat(orig_nr, (struct pt_regs *)regs);
+ }
+ 
+ long __nocfi ksu_hook_faccessat(int orig_nr, const struct pt_regs *regs)
+ {
++	if (ksu_is_hidden_app())
++		return ksu_syscall_table[orig_nr](regs);
++
+ 	if (!ksu_su_compat_enabled)
+ 		return ksu_syscall_table[orig_nr](regs);
+ 
+ 	return ksu_handle_faccessat_sucompat(orig_nr, (struct pt_regs *)regs);
+ }

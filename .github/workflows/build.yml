@@ -1,0 +1,65 @@
+name: Build LKM
+
+on:
+  workflow_dispatch:
+    inputs:
+      kmi:
+        description: "GKI KMI version to build"
+        required: false
+        default: "android12-5.10"
+        type: choice
+        options:
+          - android12-5.10
+          - android13-5.10
+          - android13-5.15
+          - android14-5.15
+          - android14-6.1
+          - android15-6.6
+          - android16-6.12
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git curl wget python3 zip llvm
+
+      # ddk 是 KernelSU 官方 LKM 构建工具，会自动拉取对应 GKI 内核源码
+      # 并匹配 Module.symvers，无需整 AOSP。
+      - name: Install ddk
+        run: |
+          curl -L https://github.com/KernelSU/ddk/releases/latest/download/ddk -o ddk
+          chmod +x ddk
+          sudo mv ddk /usr/local/bin/ddk
+          ddk --help || true
+
+      # 仓库内已包含改好的 kernel 源码（含 ksu_hide_uid 补丁），
+      # 直接用它来编，不依赖外部 tag。
+      - name: Build LKM with ddk
+        run: |
+          cd kernelsu-kernel
+          KMI="${{ github.event.inputs.kmi || 'android12-5.10' }}"
+          echo "Building for KMI: $KMI"
+          ddk build "$KMI" -e CONFIG_KSU=m
+
+      - name: Strip and collect artifact
+        run: |
+          cd kernelsu-kernel
+          KO=$(find out -name 'kernelsu.ko' | head -n1)
+          if [ -z "$KO" ]; then echo "kernelsu.ko not found!"; exit 1; fi
+          llvm-strip -d "$KO" 2>/dev/null || strip "$KO"
+          cp "$KO" "$GITHUB_WORKSPACE/kernelsu.ko"
+          ls -l "$GITHUB_WORKSPACE/kernelsu.ko"
+
+      - name: Upload kernel_su LKM
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernelsu-module
+          path: kernelsu.ko

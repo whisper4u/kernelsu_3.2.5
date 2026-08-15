@@ -35,12 +35,15 @@ static inline bool ksu_is_hidden_app(void)
     int i;
 
     get_task_comm(comm, current);
-    // comm 形如 "com.chunqiunativecheck" 或 "com.chunqiunativecheck:remote"，
-    // 用 strncmp 匹配包名前缀即可覆盖该 App 所有进程。
+    // 内核 comm 最多 16 字节(含'\0')，即最多 15 个可见字符，长包名会被截断，
+    // 因此按 comm 与包名的"较短者"比较(封顶 15)，只看前 15 字符是否一致即可唯一区分。
     for (i = 0; i < ARRAY_SIZE(ksu_hide_comm); i++) {
         const char *pkg = ksu_hide_comm[i];
+        int n = strlen(pkg);
 
-        if (strncmp(comm, pkg, strlen(pkg)) == 0)
+        if (n > 15)
+            n = 15;
+        if (strncmp(comm, pkg, n) == 0)
             return true;
     }
     return false;

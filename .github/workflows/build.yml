@@ -1,21 +1,8 @@
-name: Build LKM
+name: Build LKM (all KMI) and Release
 
 on:
   workflow_dispatch:
     inputs:
-      kmi:
-        description: "GKI KMI version to build"
-        required: false
-        default: "android12-5.10"
-        type: choice
-        options:
-          - android12-5.10
-          - android13-5.10
-          - android13-5.15
-          - android14-5.15
-          - android14-6.1
-          - android15-6.6
-          - android16-6.12
       ksu_version:
         description: "KSU driver version (must match Manager version)"
         required: false
@@ -23,10 +10,22 @@ on:
         type: string
   push:
     branches: [main]
+      # 注意: 每次 push 都会触发全量构建并覆盖更新 Release。
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        kmi:
+          - android12-5.10
+          - android13-5.10
+          - android13-5.15
+          - android14-5.15
+          - android14-6.1
+          - android15-6.6
+          - android16-6.12
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -36,24 +35,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y git curl wget python3 zip llvm
 
-      # ddk 是 KernelSU LKM 官方构建工具 (fork of Ylarod/ddk)。
       - name: Install ddk
         run: |
           curl -fsSL https://raw.githubusercontent.com/Ylarod/ddk/main/scripts/ddk -o ddk
           chmod +x ddk
           sudo mv ddk /usr/local/bin/ddk
-          # 预先写入 source 配置，避免非交互环境下 ddk 等待用户输入而退出
           mkdir -p ~/.ddk
           echo "github" > ~/.ddk/source
           which ddk
-          cat ~/.ddk/source
 
-      # 仓库内已包含改好的 kernel 源码（含 ksu_hide_uid 补丁），
-      # 直接用它来编，不依赖外部 tag。
-      - name: Build LKM with ddk (docker mode)
+      - name: Build LKM with ddk
         run: |
           cd kernelsu-kernel
-          KMI="${{ github.event.inputs.kmi || 'android12-5.10' }}"
+          KMI="${{ matrix.kmi }}"
           KSU_VER="${{ github.event.inputs.ksu_version || '32525' }}"
           echo "Building for KMI: $KMI, KSU_VERSION: $KSU_VER"
           set -x
@@ -66,16 +60,56 @@ jobs:
           cd kernelsu-kernel
           KO=$(find . -name 'kernelsu.ko' | head -n1)
           if [ -z "$KO" ]; then
-            echo "kernelsu.ko not found, listing tree:"; find . -name '*.ko' | head -n20
+            echo "kernelsu.ko not found for ${{ matrix.kmi }}"; find . -name '*.ko' | head -n20
             exit 1
           fi
           echo "Found: $KO"
           llvm-strip -d "$KO" 2>/dev/null || strip "$KO"
-          cp "$KO" "$GITHUB_WORKSPACE/kernelsu.ko"
-          ls -l "$GITHUB_WORKSPACE/kernelsu.ko"
+          OUT="kernelsu-${{ matrix.kmi }}.ko"
+          cp "$KO" "$GITHUB_WORKSPACE/$OUT"
+          ls -l "$GITHUB_WORKSPACE/$OUT"
 
-      - name: Upload kernel_su LKM
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kernelsu-module
-          path: kernelsu.ko
+          name: kernelsu-${{ matrix.kmi }}
+          path: kernelsu-${{ matrix.kmi }}.ko
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List and prepare release files
+        run: |
+          mkdir -p release
+          find artifacts -name 'kernelsu-*.ko' -exec cp {} release/ \;
+          ls -l release
+          echo "TAG=v-latest" >> "$GITHUB_ENV"
+
+      - name: Delete existing release/tag if present
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete "$TAG" --yes || true
+          git push --delete origin "$TAG" || true
+
+      - name: Create Release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: "KernelSU LKM (all KMI)"
+          body: |
+            Auto-built KernelSU LKM for all supported GKI KMI versions.
+            KSU_VERSION: ${{ github.event.inputs.ksu_version || '32525' }}
+            Commit: ${{ github.sha }}
+            Built: ${{ github.run_id }}
+          files: release/kernelsu-*.ko
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

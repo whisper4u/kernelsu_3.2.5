@@ -8,6 +8,8 @@
 #include <linux/static_key.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/moduleparam.h>
 
 #include "arch.h"
 #include "klog.h" // IWYU pragma: keep
@@ -21,26 +23,23 @@
 #include "hook/syscall_event_bridge.h"
 #include "feature/adb_root.h"
 
-// 仅对指定包名的 App 跳过 sucompat 逻辑，使其 stat/faccessat 调用回归原生，
-// 从而规避基于 stat 时延差的 root 检测。按包名(进程 comm)匹配，跨手机通用，
-// 无需关心动态分配的 uid。包名编译期固定，如需增减包名改这里即可。
-static const char *const ksu_hide_comm[] = {
-    "com.chunqiunativecheck",
-    "com.zhenxi.hunter",
-};
+// 仅对指定 uid 的 App 跳过 sucompat 逻辑，使其 stat/faccessat 调用回归原生，
+// 从而规避基于 stat 时延攻击的 root 检测。uid 由用户态开机脚本填入
+// (见 ksu_hide_uid 参数)，默认 0 表示不隐藏任何人。按 uid 匹配最稳，
+// 因为 App 所有线程 uid 相同，而 comm/cmdline 在线程池场景不可靠。
+// 支持多个 uid(逗号/空格分隔写同一行)，如: echo "10307 10308" > .../ksu_hide_uid
+static int ksu_hide_uid[8];
+static int ksu_hide_uid_num;
+module_param_array(ksu_hide_uid, int, &ksu_hide_uid_num, 0644);
+MODULE_PARM_DESC(ksu_hide_uid, "uids of apps to skip sucompat hide (stat/faccessat latency)");
 
 static inline bool ksu_is_hidden_app(void)
 {
-    char comm[TASK_COMM_LEN];
+    uid_t uid = current_uid().val;
     int i;
 
-    get_task_comm(comm, current);
-    // comm 形如 "com.chunqiunativecheck" 或 "com.chunqiunativecheck:remote"，
-    // 用 strncmp 匹配包名前缀即可覆盖该 App 所有进程。
-    for (i = 0; i < ARRAY_SIZE(ksu_hide_comm); i++) {
-        const char *pkg = ksu_hide_comm[i];
-
-        if (strncmp(comm, pkg, strlen(pkg)) == 0)
+    for (i = 0; i < ksu_hide_uid_num; i++) {
+        if (ksu_hide_uid[i] != 0 && uid == (uid_t)ksu_hide_uid[i])
             return true;
     }
     return false;

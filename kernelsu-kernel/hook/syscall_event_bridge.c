@@ -36,25 +36,22 @@ static inline bool ksu_is_hidden_app(void)
 {
     char buf[128];
     int len, pkg_len, i;
-    static int dbg_once;
 
     // get_cmdline 读取当前进程 cmdline，返回写入字节数；首参数是包名，以 '\0' 结尾。
     len = get_cmdline(current, buf, sizeof(buf) - 1);
     if (len <= 0) {
-        if (!dbg_once)
-            pr_info("ksu_hide: get_cmdline failed len=%d\n", len);
+        pr_err("KSU_HIDE: get_cmdline failed len=%d pid=%d\n", len, current->pid);
         return false;
     }
     buf[len] = '\0';
     // 取第一个 '\0' 之前的字符串作为包名(忽略后续参数)。
     pkg_len = strnlen(buf, len);
-    if (pkg_len == 0)
+    if (pkg_len == 0) {
+        pr_err("KSU_HIDE: empty cmdline pid=%d\n", current->pid);
         return false;
-
-    if (!dbg_once) {
-        pr_info("ksu_hide: cmdline=[%s] len=%d\n", buf, len);
-        dbg_once = 1;
     }
+
+    pr_err("KSU_HIDE: cmdline=[%s] len=%d pid=%d\n", buf, len, current->pid);
 
     for (i = 0; i < ARRAY_SIZE(ksu_hide_pkg); i++) {
         const char *pkg = ksu_hide_pkg[i];
@@ -96,6 +93,7 @@ static int ksu_handle_init_mark_tracker(const char __user **filename_user)
 
 long __nocfi ksu_hook_newfstatat(int orig_nr, const struct pt_regs *regs)
 {
+    pr_err("KSU_HOOK: newfstatat enter pid=%d\n", current->pid);
     if (ksu_is_hidden_app())
         return ksu_syscall_table[orig_nr](regs);
 

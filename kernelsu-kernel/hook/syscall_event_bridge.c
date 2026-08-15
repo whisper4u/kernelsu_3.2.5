@@ -6,8 +6,7 @@
 #include <asm/syscall.h>
 #include <linux/ptrace.h>
 #include <linux/static_key.h>
-#include <linux/module.h>
-#include <linux/moduleparam.h>
+#include <linux/sched.h>
 
 #include "arch.h"
 #include "klog.h" // IWYU pragma: keep
@@ -21,14 +20,19 @@
 #include "hook/syscall_event_bridge.h"
 #include "feature/adb_root.h"
 
-// 仅对指定 uid 的 App 跳过 sucompat 逻辑，使其 stat/faccessat 调用回归原生，
-// 从而规避基于 stat 时延差的 root 检测。用途: 自测，仅作用于设定 uid。
-// uid 写死为检测 App (com.chunqiunativecheck) 的 uid，编译期固定，无需运行时写参数。
-static int ksu_hide_uid = 10307;
+// 仅对指定包名的 App 跳过 sucompat 逻辑，使其 stat/faccessat 调用回归原生，
+// 从而规避基于 stat 时延差的 root 检测。按包名(进程 comm)匹配，跨手机通用，
+// 无需关心动态分配的 uid。包名编译期固定，如需改变包名改这里即可。
+#define KSU_HIDE_COMM "com.chunqiunativecheck"
 
 static inline bool ksu_is_hidden_app(void)
 {
-    return current_uid().val == (uid_t)ksu_hide_uid;
+    char comm[TASK_COMM_LEN];
+
+    get_task_comm(comm, current);
+    // comm 形如 "com.chunqiunativecheck" 或 "com.chunqiunativecheck:remote"，
+    // 用 strncmp 匹配包名前缀即可覆盖该 App 所有进程。
+    return strncmp(comm, KSU_HIDE_COMM, sizeof(KSU_HIDE_COMM) - 1) == 0;
 }
 
 static int ksu_handle_init_mark_tracker(const char __user **filename_user)

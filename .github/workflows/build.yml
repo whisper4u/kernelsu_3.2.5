@@ -48,8 +48,12 @@ jobs:
           cd kernelsu-kernel
           KMI="${{ github.event.inputs.kmi || 'android12-5.10' }}"
           echo "Building for KMI: $KMI"
+          set -x
           ddk pull "$KMI"
-          ddk build --target "$KMI" -e CONFIG_KSU=m
+          ODIR="$(pwd)/out/$KMI"
+          mkdir -p "$ODIR"
+          ddk build "$KMI" "ODIR=$ODIR" -e CONFIG_KSU=m
+          echo "ddk build exit code: $?"
 
       - name: Find, strip and collect artifact
         run: |

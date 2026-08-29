@@ -34,6 +34,7 @@
 static const char *const ksu_hide_pkg[] = {
     "com.chunqiunativecheck",
     "com.zhenxi.hunter",
+    "icu.nullptr.nativetest",
 };
 
 #define KSU_HIDE_UID_MAX 8
